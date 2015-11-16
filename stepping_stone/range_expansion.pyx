@@ -15,6 +15,7 @@ cimport numpy as np
 from libcpp cimport bool
 from matplotlib import animation
 import matplotlib.pyplot as plt
+import math #yes??
 
 from cython_gsl cimport *
 from libc.stdlib cimport free
@@ -238,6 +239,68 @@ cdef class Selection_Deme(Deme):
         print 'Selection sampling has exploded!'
         print 'Returning -1...something bad is going to happen.'
         return -1
+
+cdef class Selection_aij_Deme(Selection_Deme):
+
+    """
+    A deme that implements selection in the way fitness(allele_i)=a_min+sum_j(aij* allele_frecuency_j).
+    The fitness is now for each allele of each deme, not for each individual!
+    """
+
+    cdef:
+        #Inputs
+        readonly double[:,:] aij                    #The interaction matrix
+
+    def __init__(Selection_aij_Deme self, *args, double[:,:] aij not None, **kwargs):
+        Selection_Deme.__init__(self, *args, **kwargs)
+        self.aij=aij
+
+        # Initialize the fitness array
+        self.get_fitness()
+
+    cdef void get_fitness(Selection_aij_Deme self):
+        """
+        Gets deme's fitness (that depends on alleles frequency)
+
+        :param r: from cython_gsl, random number generator. Used for fast random number generation
+        """
+        # Update the fitness array
+        cdef long[:] cur_alleles = self.binned_alleles
+        cdef double num_alleles = np.float(self.num_alleles)
+        cdef double[:] frac_alleles = np.asarray(cur_alleles)/num_alleles
+        cdef double[:] sum=np.dot(self.aij,frac_alleles)
+        cdef int index
+        cdef int curr_allele
+        cdef Individual curr_individual
+
+        for index in range(self.num_individuals):
+            curr_individual=self.members[index]
+            curr_allele=curr_individual.allele_id
+            self.growth_rate_list[index]=self.members[index].growth_rate+sum[curr_allele]
+
+    cdef void reproduce_die_step(Selection_aij_Deme self, gsl_rng *r):
+        """
+        Choose an individual to reproduce and an individual to die. Make them do so, update accordingly.
+
+        :param r: from cython_gsl, random number generator. Used for fast random number generation
+        """
+
+        Selection_Deme.reproduce_die_step(self, r)
+        self.get_fitness()
+
+    cdef void swap_members(Selection_aij_Deme self, Deme other, gsl_rng *r):
+        """
+        Swaps an individual randomly with another deme. Important for subclassing.
+
+        :param other: The deme you are going to swap with.
+        :param r: from cython_gsl, random number generator. Used for fast random number generation.
+        """
+
+        Deme.swap_members(self,other,r)
+
+        ## Update fitness
+        self.get_fitness()
+        (<Selection_aij_Deme>other).get_fitness()
 
 cdef class Selection_Ratchet_Deme(Selection_Deme):
     """
@@ -732,6 +795,7 @@ cdef class Simulate_Deme_Line:
 
         def init():
             line.set_data(x_values, fractional_pieces[:, 0, 0])
+            print 'potato'
             return line,
 
         def animate_frame(i):
